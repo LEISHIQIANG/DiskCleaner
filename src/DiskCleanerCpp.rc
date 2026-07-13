@@ -1,6 +1,6 @@
 #include "resource.h"
 
-IDI_APP_ICON ICON "..\app.ico"
+IDI_APP_ICON ICON "../app.ico"
 
 #ifndef IDC_STATIC
 #define IDC_STATIC (-1)
