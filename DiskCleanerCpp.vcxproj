@@ -88,10 +88,10 @@
   <ItemGroup>
     <ClInclude Include="src\AppWindow.h" />
     <ClInclude Include="src\DiskCleanerCore.h" />
-    <ClInclude Include="resource.h" />
+    <ClInclude Include="src\resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="DiskCleanerCpp.rc" />
+    <ResourceCompile Include="src\DiskCleanerCpp.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
