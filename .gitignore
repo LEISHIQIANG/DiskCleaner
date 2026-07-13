@@ -1,0 +1,13 @@
+.vs/
+build/
+*.user
+*.suo
+*.db
+*.ipdb
+*.iobj
+*.obj
+*.pdb
+*.tlog/
+*.recipe
+*.log
+*.res
