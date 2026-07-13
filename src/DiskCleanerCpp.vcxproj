@@ -81,17 +81,17 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\AppWindow.cpp" />
-    <ClCompile Include="src\DiskCleanerCore.cpp" />
-    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="AppWindow.cpp" />
+    <ClCompile Include="DiskCleanerCore.cpp" />
+    <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\AppWindow.h" />
-    <ClInclude Include="src\DiskCleanerCore.h" />
-    <ClInclude Include="src\resource.h" />
+    <ClInclude Include="AppWindow.h" />
+    <ClInclude Include="DiskCleanerCore.h" />
+    <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="src\DiskCleanerCpp.rc" />
+    <ResourceCompile Include="DiskCleanerCpp.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
