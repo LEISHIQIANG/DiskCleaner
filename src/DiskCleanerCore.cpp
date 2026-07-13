@@ -29,20 +29,14 @@ const std::vector<CleanItemDefinition>& BuildItems() {
     static const std::vector<CleanItemDefinition> items = {
         {L"temp", L"临时文件", L"清理 Windows 和用户临时目录", false},
         {L"recycle", L"回收站", L"清空所有驱动器的回收站", false},
+        {L"prefetch", L"预读取文件", L"清理系统预读缓存（保留 7 天内）", false},
         {L"thumb", L"缩略图缓存", L"清理图片和图标缓存文件", false},
-        {L"wincache", L"Windows 缓存", L"清理系统缓存和兼容性缓存", false},
-        {L"appcache", L"应用缓存", L"清理常见软件和开发工具缓存", false},
         {L"browser", L"浏览器缓存", L"清理 Chrome / Edge / Firefox 缓存", false},
         {L"logs", L"系统日志", L"清理 Windows 日志文件", false},
         {L"recent", L"最近文档", L"清理文件访问历史记录", false},
         {L"error", L"错误报告", L"清理 Windows 错误报告文件", false},
         {L"directx", L"DirectX 缓存", L"清理显卡着色器缓存", false},
-        {L"gpu", L"显卡缓存", L"清理 NVIDIA / AMD / Intel 着色器缓存", false},
-        {L"inet", L"Internet 缓存", L"清理 Windows WinINet 缓存", false},
-        {L"crashdumps", L"崩溃转储", L"清理应用 CrashDumps 文件", false},
-        {L"setup", L"安装残留", L"清理 Windows 安装和升级残留文件", false},
         {L"font", L"字体缓存", L"清理系统字体缓存文件", false},
-        {L"prefetch", L"预读取文件", L"清理系统预读缓存（保留 7 天内）", false},
         {L"update", L"更新缓存", L"清理 Windows Update 下载文件", true},
         {L"hibernate", L"休眠文件", L"禁用休眠功能并删除休眠文件", true},
         {L"restore", L"系统还原点", L"清理旧的系统还原点", true},
@@ -66,24 +60,6 @@ std::wstring GetEnvVar(const wchar_t* name) {
         value.pop_back();
     }
     return value;
-}
-
-std::wstring SystemRoot() {
-    const auto value = GetEnvVar(L"SYSTEMROOT");
-    return value.empty() ? L"C:\\Windows" : value;
-}
-
-std::wstring SystemDrive() {
-    const auto value = GetEnvVar(L"SYSTEMDRIVE");
-    return value.empty() ? L"C:" : value;
-}
-
-std::wstring SystemPath(const wchar_t* suffix) {
-    return SystemRoot() + suffix;
-}
-
-std::wstring DrivePath(const wchar_t* suffix) {
-    return SystemDrive() + suffix;
 }
 
 bool IsOlderThan(const fs::path& path, int min_age_days) {
@@ -347,8 +323,7 @@ const std::vector<CleanItemDefinition>& DiskCleanerCore::AllItems() {
 }
 
 std::vector<std::wstring> DiskCleanerCore::DefaultSelection() {
-    return {L"temp", L"recycle", L"thumb", L"wincache", L"browser", L"appcache",
-        L"logs", L"directx", L"gpu", L"inet", L"crashdumps"};
+    return {L"temp", L"recycle", L"prefetch", L"thumb", L"browser"};
 }
 
 std::wstring DiskCleanerCore::FormatSize(std::uint64_t size) const {
@@ -409,42 +384,31 @@ std::uint64_t DiskCleanerCore::ScanFolder(const std::wstring& path, const std::w
             continue;
         }
 
-        const auto entry_path = it->path();
-        std::error_code type_ec;
-        if (fs::is_directory(entry_path, type_ec)) {
-            if (min_age_days > 0) {
-                total += ScanFolder(entry_path.wstring(), file_pattern, min_age_days);
-            } else {
-                total += GetPathSize(entry_path);
-            }
+        if (!IsOlderThan(it->path(), min_age_days)) {
             continue;
         }
-
-        if (!IsOlderThan(entry_path, min_age_days)) {
-            continue;
-        }
-        if (!MatchesPattern(entry_path.filename().wstring(), file_pattern)) {
+        if (!MatchesPattern(it->path().filename().wstring(), file_pattern)) {
             continue;
         }
 
         std::error_code item_ec;
-        if (fs::is_regular_file(entry_path, item_ec)) {
+        if (it->is_regular_file(item_ec)) {
             total += static_cast<std::uint64_t>(it->file_size(item_ec));
+        } else if (it->is_directory(item_ec)) {
+            total += GetPathSize(it->path());
         }
     }
     return total;
 }
 
 std::uint64_t DiskCleanerCore::CleanFolder(const std::wstring& path, const std::wstring& desc,
-    const std::wstring& file_pattern, int min_age_days, bool log_result, bool is_recursive_call) {
+    const std::wstring& file_pattern, int min_age_days) {
     std::error_code ec;
     if (!fs::exists(path, ec)) {
         return 0;
     }
     if (!CheckPathAccessible(path)) {
-        if (log_result) {
-            Log(L"  " + desc + L": 无访问权限");
-        }
+        Log(L"  " + desc + L": 无访问权限");
         return 0;
     }
 
@@ -460,18 +424,6 @@ std::uint64_t DiskCleanerCore::CleanFolder(const std::wstring& path, const std::
         }
 
         const auto entry_path = it->path();
-        std::error_code type_ec;
-        if (fs::is_directory(entry_path, type_ec)) {
-            if (min_age_days > 0) {
-                cleaned += CleanFolder(entry_path.wstring(), desc, file_pattern, min_age_days, false, true);
-                std::error_code empty_ec;
-                if (fs::is_empty(entry_path, empty_ec)) {
-                    fs::remove(entry_path, empty_ec);
-                }
-                continue;
-            }
-        }
-
         if (!IsOlderThan(entry_path, min_age_days)) {
             continue;
         }
@@ -496,7 +448,7 @@ std::uint64_t DiskCleanerCore::CleanFolder(const std::wstring& path, const std::
         }
     }
 
-    if (log_result && cleaned > 0) {
+    if (cleaned > 0) {
         std::wstring message = L"  " + desc + L": " + FormatSize(cleaned);
         if (failed > 0) {
             message += L" (跳过 " + std::to_wstring(failed) + L" 项)";
@@ -504,9 +456,7 @@ std::uint64_t DiskCleanerCore::CleanFolder(const std::wstring& path, const std::
         Log(message);
     }
 
-    if (!is_recursive_call) {
-        total_cleaned_ += cleaned;
-    }
+    total_cleaned_ += cleaned;
     return cleaned;
 }
 
@@ -520,7 +470,7 @@ std::uint64_t DiskCleanerCore::GetRecycleSize() const {
 }
 
 std::uint64_t DiskCleanerCore::GetRestoreSize() const {
-    const auto result = RunProcess(L"vssadmin.exe", {L"list", L"shadowstorage", L"/for=" + SystemDrive()}, 10000);
+    const auto result = RunProcess(L"vssadmin.exe", {L"list", L"shadowstorage", L"/for=C:"}, 10000);
     if (result.timed_out) {
         return 0;
     }
@@ -564,9 +514,7 @@ std::uint64_t DiskCleanerCore::ScanBrowserCacheSize() const {
     };
 
     const std::vector<std::wstring> cache_dirs = {
-        L"Cache", L"Code Cache", L"GPUCache", L"Service Worker\\CacheStorage",
-        L"Service Worker\\ScriptCache", L"cache2", L"CacheStorage", L"Media Cache",
-        L"ShaderCache", L"GrShaderCache", L"GraphiteDawnCache", L"DawnCache", L"startupCache"
+        L"Cache", L"Code Cache", L"GPUCache", L"Service Worker", L"cache2", L"CacheStorage"
     };
 
     std::uint64_t total = 0;
@@ -613,172 +561,75 @@ std::uint64_t DiskCleanerCore::ScanBrowserCacheSize() const {
     return total;
 }
 
-std::uint64_t DiskCleanerCore::ScanWindowsCacheSize() const {
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const std::vector<std::wstring> paths = {
-        local + LR"(\Microsoft\Windows\Caches)",
-        local + LR"(\Microsoft\Windows\IECompatCache)",
-        local + LR"(\Microsoft\Windows\IECompatUaCache)",
-        local + LR"(\Microsoft\Windows\IETldCache)",
-    };
-    std::uint64_t total = 0;
-    for (const auto& path : paths) {
-        total += ScanFolder(path);
-    }
-    return total;
-}
-
-std::uint64_t DiskCleanerCore::ScanApplicationCacheSize() const {
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const auto roaming = GetEnvVar(L"APPDATA");
-    const auto program_files_x86 = GetEnvVar(L"PROGRAMFILES(X86)");
-    const auto user_profile = GetEnvVar(L"USERPROFILE");
-    const std::vector<std::wstring> paths = {
-        local + LR"(\Code\Cache)", local + LR"(\Code\CachedData)", local + LR"(\Code\Code Cache)", local + LR"(\Code\GPUCache)",
-        local + LR"(\Cursor\Cache)", local + LR"(\Cursor\CachedData)", local + LR"(\Cursor\Code Cache)", local + LR"(\Cursor\GPUCache)",
-        roaming + LR"(\discord\Cache)", roaming + LR"(\discord\Code Cache)", roaming + LR"(\discord\GPUCache)",
-        roaming + LR"(\Slack\Cache)", roaming + LR"(\Notion\Cache)", roaming + LR"(\Figma\Cache)",
-        local + LR"(\GitHub Desktop\Cache)", roaming + LR"(\Microsoft\Teams\Cache)",
-        local + LR"(\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\Default)",
-        local + LR"(\Adobe\CameraRaw\Cache)", local + LR"(\Adobe\Common\Media Cache)", local + LR"(\Adobe\Common\Media Cache Files)",
-        local + LR"(\EpicGamesLauncher\Saved\webcache)", program_files_x86 + LR"(\Steam\config\htmlcache)",
-        user_profile + LR"(\.nuget\packages)", user_profile + LR"(\AppData\Local\pip\cache)",
-        user_profile + LR"(\AppData\Local\npm-cache)", user_profile + LR"(\AppData\Roaming\npm-cache)",
-        user_profile + LR"(\AppData\Local\Yarn\Cache)", user_profile + LR"(\.cargo\registry\cache)",
-    };
-    std::uint64_t total = 0;
-    for (const auto& path : paths) {
-        total += ScanFolder(path);
-    }
-    total += ScanFolder(local + LR"(\Microsoft\Windows\WebCache)", L"webcache*");
-    return total;
-}
-
-std::uint64_t DiskCleanerCore::ScanGpuCacheSize() const {
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const auto user_profile = GetEnvVar(L"USERPROFILE");
-    const std::vector<std::wstring> paths = {
-        local + LR"(\NVIDIA\DXCache)", local + LR"(\NVIDIA\GLCache)", local + LR"(\NVIDIA Corporation\NV_Cache)",
-        local + LR"(\AMD\DxCache)", local + LR"(\AMD\GLCache)", local + LR"(\Intel\ShaderCache)",
-        user_profile + LR"(\AppData\LocalLow\Intel\ShaderCache)",
-    };
-    std::uint64_t total = 0;
-    for (const auto& path : paths) {
-        total += ScanFolder(path);
-    }
-    return total;
-}
-
-std::uint64_t DiskCleanerCore::ScanInternetCacheSize() const {
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const std::vector<std::wstring> paths = {
-        local + LR"(\Microsoft\Windows\INetCache)",
-        SystemPath(L"\\System32\\config\\systemprofile\\AppData\\Local\\Microsoft\\Windows\\INetCache"),
-        SystemPath(L"\\ServiceProfiles\\LocalService\\AppData\\Local\\Microsoft\\Windows\\INetCache"),
-        SystemPath(L"\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\INetCache"),
-    };
-    std::uint64_t total = 0;
-    for (const auto& path : paths) {
-        total += ScanFolder(path);
-    }
-    return total;
-}
-
-std::uint64_t DiskCleanerCore::ScanCrashDumpSize() const {
-    return ScanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\CrashDumps)");
-}
-
-std::uint64_t DiskCleanerCore::ScanSetupResidueSize() const {
-    return ScanFolder(SystemPath(L"\\Panther")) +
-        ScanFolder(SystemPath(L"\\Logs\\MoSetup")) +
-        ScanFolder(DrivePath(L"\\$WinREAgent"));
-}
-
 std::uint64_t DiskCleanerCore::ScanItem(const std::wstring& key) {
     if (key == L"temp") {
-        return ScanFolder(SystemPath(L"\\Temp")) +
+        return ScanFolder(LR"(C:\Windows\Temp)") +
             ScanFolder(GetEnvVar(L"TEMP").empty() ? GetEnvVar(L"TMP") : GetEnvVar(L"TEMP"));
     }
     if (key == L"recycle") {
         return GetRecycleSize();
     }
     if (key == L"prefetch") {
-        return ScanFolder(SystemPath(L"\\Prefetch"), L"*.pf", 7);
+        return ScanFolder(LR"(C:\Windows\Prefetch)", L"*.pf", 7);
     }
     if (key == L"thumb") {
         return ScanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\Microsoft\Windows\Explorer)");
-    }
-    if (key == L"wincache") {
-        return ScanWindowsCacheSize();
-    }
-    if (key == L"appcache") {
-        return ScanApplicationCacheSize();
     }
     if (key == L"browser") {
         return ScanBrowserCacheSize();
     }
     if (key == L"logs") {
-        return ScanFolder(SystemPath(L"\\Logs"), L"", 7) +
-            ScanFolder(SystemPath(L"\\Logs\\CBS"), L"*.log", 7) +
-            ScanFolder(SystemPath(L"\\Logs\\DISM"), L"", 7);
+        return ScanFolder(LR"(C:\Windows\Logs)", L"", 7) +
+            ScanFolder(LR"(C:\Windows\Logs\CBS)", L"*.log", 7) +
+            ScanFolder(LR"(C:\Windows\Logs\DISM)", L"", 7);
     }
     if (key == L"recent") {
         return ScanFolder(GetEnvVar(L"APPDATA") + LR"(\Microsoft\Windows\Recent)");
     }
     if (key == L"error") {
         return ScanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\Microsoft\Windows\WER)") +
-            ScanFolder(GetEnvVar(L"PROGRAMDATA") + LR"(\Microsoft\Windows\WER)");
+            ScanFolder(LR"(C:\ProgramData\Microsoft\Windows\WER)");
     }
     if (key == L"update") {
-        return ScanFolder(SystemPath(L"\\SoftwareDistribution\\Download"));
+        return ScanFolder(LR"(C:\Windows\SoftwareDistribution\Download)");
     }
     if (key == L"hibernate") {
-        return GetSize(DrivePath(L"\\hiberfil.sys"));
+        return GetSize(LR"(C:\hiberfil.sys)");
     }
     if (key == L"restore") {
         return GetRestoreSize();
     }
     if (key == L"oldwin") {
-        return GetSize(DrivePath(L"\\Windows.old"));
+        return GetSize(LR"(C:\Windows.old)");
     }
     if (key == L"dumps") {
-        return GetSize(SystemPath(L"\\MEMORY.DMP")) +
-            GetSize(SystemPath(L"\\Minidump")) +
-            GetSize(SystemPath(L"\\LiveKernelReports"));
+        return GetSize(LR"(C:\Windows\MEMORY.DMP)") +
+            GetSize(LR"(C:\Windows\Minidump)") +
+            GetSize(LR"(C:\Windows\LiveKernelReports)");
     }
     if (key == L"delivery") {
-        return ScanFolder(SystemPath(L"\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization"));
+        const auto system_root = GetEnvVar(L"SYSTEMROOT").empty() ? L"C:\\Windows" : GetEnvVar(L"SYSTEMROOT");
+        return ScanFolder(system_root + LR"(\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization)");
     }
     if (key == L"events") {
-        return ScanFolder(SystemPath(L"\\System32\\winevt\\Logs"));
+        return ScanFolder(LR"(C:\Windows\System32\winevt\Logs)");
     }
     if (key == L"directx") {
         return ScanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\D3DSCache)");
     }
-    if (key == L"gpu") {
-        return ScanGpuCacheSize();
-    }
-    if (key == L"inet") {
-        return ScanInternetCacheSize();
-    }
-    if (key == L"crashdumps") {
-        return ScanCrashDumpSize();
-    }
-    if (key == L"setup") {
-        return ScanSetupResidueSize();
-    }
     if (key == L"font") {
-        return ScanFolder(SystemPath(L"\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache"));
+        return ScanFolder(LR"(C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache)");
     }
     if (key == L"installer") {
-        return ScanFolder(SystemPath(L"\\Installer\\$PatchCache$"));
+        const auto windir = GetEnvVar(L"WINDIR").empty() ? L"C:\\Windows" : GetEnvVar(L"WINDIR");
+        return ScanFolder(windir + LR"(\Installer\$PatchCache$)");
     }
     return 0;
 }
 
 std::uint64_t DiskCleanerCore::CleanWindowsTemp() {
     Status(L"清理 Windows 临时文件...");
-    return CleanFolder(SystemPath(L"\\Temp"), L"Windows 临时文件");
+    return CleanFolder(LR"(C:\Windows\Temp)", L"Windows 临时文件");
 }
 
 std::uint64_t DiskCleanerCore::CleanUserTemp() {
@@ -812,7 +663,7 @@ bool DiskCleanerCore::CleanRecycleBin() {
 
 std::uint64_t DiskCleanerCore::CleanPrefetch() {
     Status(L"清理预读取文件...");
-    return CleanFolder(SystemPath(L"\\Prefetch"), L"预读取文件", L"*.pf", 7);
+    return CleanFolder(LR"(C:\Windows\Prefetch)", L"预读取文件", L"*.pf", 7);
 }
 
 std::uint64_t DiskCleanerCore::CleanThumbnailCache() {
@@ -850,15 +701,15 @@ std::uint64_t DiskCleanerCore::CleanThumbnailCache() {
 
 std::uint64_t DiskCleanerCore::CleanWindowsLogs() {
     Status(L"清理 Windows 日志...");
-    return CleanFolder(SystemPath(L"\\Logs"), L"系统日志", L"", 7) +
-        CleanFolder(SystemPath(L"\\Logs\\CBS"), L"CBS 日志", L"*.log", 7) +
-        CleanFolder(SystemPath(L"\\Logs\\DISM"), L"DISM 日志", L"", 7);
+    return CleanFolder(LR"(C:\Windows\Logs)", L"系统日志", L"", 7) +
+        CleanFolder(LR"(C:\Windows\Logs\CBS)", L"CBS 日志", L"*.log", 7) +
+        CleanFolder(LR"(C:\Windows\Logs\DISM)", L"DISM 日志", L"", 7);
 }
 
 std::uint64_t DiskCleanerCore::CleanErrorReports() {
     Status(L"清理错误报告...");
     return CleanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\Microsoft\Windows\WER)", L"用户错误报告") +
-        CleanFolder(GetEnvVar(L"PROGRAMDATA") + LR"(\Microsoft\Windows\WER)", L"系统错误报告");
+        CleanFolder(LR"(C:\ProgramData\Microsoft\Windows\WER)", L"系统错误报告");
 }
 
 std::uint64_t DiskCleanerCore::CleanBrowserCache() {
@@ -873,9 +724,7 @@ std::uint64_t DiskCleanerCore::CleanBrowserCache() {
         {local + LR"(\BraveSoftware\Brave-Browser\User Data)", L"Brave"},
     };
     const std::vector<std::wstring> cache_dirs = {
-        L"Cache", L"Code Cache", L"GPUCache", L"Service Worker\\CacheStorage",
-        L"Service Worker\\ScriptCache", L"cache2", L"CacheStorage", L"Media Cache",
-        L"ShaderCache", L"GrShaderCache", L"GraphiteDawnCache", L"DawnCache", L"startupCache"
+        L"Cache", L"Code Cache", L"GPUCache", L"Service Worker", L"cache2", L"CacheStorage"
     };
 
     std::uint64_t cleaned = 0;
@@ -924,105 +773,15 @@ std::uint64_t DiskCleanerCore::CleanBrowserCache() {
     return cleaned;
 }
 
-std::uint64_t DiskCleanerCore::CleanWindowsCache() {
-    Status(L"清理 Windows 缓存...");
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const std::vector<std::pair<std::wstring, std::wstring>> paths = {
-        {local + LR"(\Microsoft\Windows\Caches)", L"Windows 缓存"},
-        {local + LR"(\Microsoft\Windows\IECompatCache)", L"IE 兼容性缓存"},
-        {local + LR"(\Microsoft\Windows\IECompatUaCache)", L"IE UA 缓存"},
-        {local + LR"(\Microsoft\Windows\IETldCache)", L"IE 域名缓存"},
-    };
-    std::uint64_t cleaned = 0;
-    for (const auto& [path, name] : paths) {
-        cleaned += CleanFolder(path, name);
-    }
-    return cleaned;
-}
-
-std::uint64_t DiskCleanerCore::CleanApplicationCache() {
-    Status(L"清理应用缓存...");
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const auto roaming = GetEnvVar(L"APPDATA");
-    const auto program_files_x86 = GetEnvVar(L"PROGRAMFILES(X86)");
-    const auto user_profile = GetEnvVar(L"USERPROFILE");
-    const std::vector<std::pair<std::wstring, std::wstring>> paths = {
-        {local + LR"(\Code\Cache)", L"VS Code 缓存"}, {local + LR"(\Code\CachedData)", L"VS Code 缓存"}, {local + LR"(\Code\Code Cache)", L"VS Code 缓存"}, {local + LR"(\Code\GPUCache)", L"VS Code GPU 缓存"},
-        {local + LR"(\Cursor\Cache)", L"Cursor 缓存"}, {local + LR"(\Cursor\CachedData)", L"Cursor 缓存"}, {local + LR"(\Cursor\Code Cache)", L"Cursor 缓存"}, {local + LR"(\Cursor\GPUCache)", L"Cursor GPU 缓存"},
-        {roaming + LR"(\discord\Cache)", L"Discord 缓存"}, {roaming + LR"(\discord\Code Cache)", L"Discord 缓存"}, {roaming + LR"(\discord\GPUCache)", L"Discord GPU 缓存"},
-        {roaming + LR"(\Slack\Cache)", L"Slack 缓存"}, {roaming + LR"(\Notion\Cache)", L"Notion 缓存"}, {roaming + LR"(\Figma\Cache)", L"Figma 缓存"},
-        {local + LR"(\GitHub Desktop\Cache)", L"GitHub Desktop 缓存"}, {roaming + LR"(\Microsoft\Teams\Cache)", L"Teams 缓存"},
-        {local + LR"(\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView\Default)", L"新版 Teams 缓存"},
-        {local + LR"(\Adobe\CameraRaw\Cache)", L"Adobe Camera Raw 缓存"}, {local + LR"(\Adobe\Common\Media Cache)", L"Adobe 媒体缓存"}, {local + LR"(\Adobe\Common\Media Cache Files)", L"Adobe 媒体缓存"},
-        {local + LR"(\EpicGamesLauncher\Saved\webcache)", L"Epic Games 缓存"}, {program_files_x86 + LR"(\Steam\config\htmlcache)", L"Steam 缓存"},
-        {user_profile + LR"(\.nuget\packages)", L"NuGet 缓存"}, {user_profile + LR"(\AppData\Local\pip\cache)", L"Python Pip 缓存"},
-        {user_profile + LR"(\AppData\Local\npm-cache)", L"npm 本地缓存"}, {user_profile + LR"(\AppData\Roaming\npm-cache)", L"npm 漫游缓存"},
-        {user_profile + LR"(\AppData\Local\Yarn\Cache)", L"Yarn 缓存"}, {user_profile + LR"(\.cargo\registry\cache)", L"Cargo 缓存"},
-    };
-    std::uint64_t cleaned = 0;
-    for (const auto& [path, name] : paths) {
-        cleaned += CleanFolder(path, name);
-    }
-    return cleaned + CleanFolder(local + LR"(\Microsoft\Windows\WebCache)", L"WebCache", L"webcache*");
-}
-
-std::uint64_t DiskCleanerCore::CleanGpuCache() {
-    Status(L"清理显卡缓存...");
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const auto user_profile = GetEnvVar(L"USERPROFILE");
-    const std::vector<std::pair<std::wstring, std::wstring>> paths = {
-        {local + LR"(\NVIDIA\DXCache)", L"NVIDIA DX 缓存"}, {local + LR"(\NVIDIA\GLCache)", L"NVIDIA OpenGL 缓存"}, {local + LR"(\NVIDIA Corporation\NV_Cache)", L"NVIDIA 缓存"},
-        {local + LR"(\AMD\DxCache)", L"AMD DX 缓存"}, {local + LR"(\AMD\GLCache)", L"AMD OpenGL 缓存"}, {local + LR"(\Intel\ShaderCache)", L"Intel 缓存"},
-        {user_profile + LR"(\AppData\LocalLow\Intel\ShaderCache)", L"Intel 低权限缓存"},
-    };
-    std::uint64_t cleaned = 0;
-    for (const auto& [path, name] : paths) {
-        cleaned += CleanFolder(path, name);
-    }
-    return cleaned;
-}
-
-std::uint64_t DiskCleanerCore::CleanInternetCache() {
-    Status(L"清理 Internet 缓存...");
-    const auto local = GetEnvVar(L"LOCALAPPDATA");
-    const std::vector<std::pair<std::wstring, std::wstring>> paths = {
-        {local + LR"(\Microsoft\Windows\INetCache)", L"用户 WinINet 缓存"},
-        {SystemPath(L"\\System32\\config\\systemprofile\\AppData\\Local\\Microsoft\\Windows\\INetCache"), L"系统 WinINet 缓存"},
-        {SystemPath(L"\\ServiceProfiles\\LocalService\\AppData\\Local\\Microsoft\\Windows\\INetCache"), L"LocalService WinINet 缓存"},
-        {SystemPath(L"\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\INetCache"), L"NetworkService WinINet 缓存"},
-    };
-    std::uint64_t cleaned = 0;
-    for (const auto& [path, name] : paths) {
-        cleaned += CleanFolder(path, name);
-    }
-
-    Status(L"刷新 DNS 缓存...");
-    RunProcess(L"ipconfig.exe", {L"/flushdns"}, 10000);
-    Log(L"  DNS 缓存: 已刷新");
-
-    return cleaned;
-}
-
-std::uint64_t DiskCleanerCore::CleanCrashDumps() {
-    Status(L"清理崩溃转储...");
-    return CleanFolder(GetEnvVar(L"LOCALAPPDATA") + LR"(\CrashDumps)", L"应用 CrashDumps");
-}
-
-std::uint64_t DiskCleanerCore::CleanSetupResidue() {
-    Status(L"清理安装残留...");
-    return CleanFolder(SystemPath(L"\\Panther"), L"Windows Panther 日志") +
-        CleanFolder(SystemPath(L"\\Logs\\MoSetup"), L"MoSetup 日志") +
-        CleanFolder(DrivePath(L"\\$WinREAgent"), L"Windows 安装残留");
-}
-
 std::uint64_t DiskCleanerCore::CleanFontCache() {
     Status(L"清理字体缓存...");
-    return CleanFolder(SystemPath(L"\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache"), L"字体缓存");
+    return CleanFolder(LR"(C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache)", L"字体缓存");
 }
 
 std::uint64_t DiskCleanerCore::CleanInstallerCache() {
     Status(L"清理安装缓存...");
-    return CleanFolder(SystemPath(L"\\Installer\\$PatchCache$"), L"安装补丁缓存");
+    const auto windir = GetEnvVar(L"WINDIR").empty() ? L"C:\\Windows" : GetEnvVar(L"WINDIR");
+    return CleanFolder(windir + LR"(\Installer\$PatchCache$)", L"安装补丁缓存");
 }
 
 std::uint64_t DiskCleanerCore::CleanWindowsUpdate() {
@@ -1038,8 +797,8 @@ std::uint64_t DiskCleanerCore::CleanWindowsUpdate() {
         }
     }
 
-    const std::uint64_t cleaned = CleanFolder(SystemPath(L"\\SoftwareDistribution\\Download"), L"更新下载缓存") +
-        CleanFolder(SystemPath(L"\\SoftwareDistribution\\DataStore\\Logs"), L"更新数据日志");
+    const std::uint64_t cleaned = CleanFolder(LR"(C:\Windows\SoftwareDistribution\Download)", L"更新下载缓存") +
+        CleanFolder(LR"(C:\Windows\SoftwareDistribution\DataStore\Logs)", L"更新数据日志");
 
     for (auto it = stopped_services.rbegin(); it != stopped_services.rend(); ++it) {
         Log(L"  启动服务: " + *it);
@@ -1051,7 +810,7 @@ std::uint64_t DiskCleanerCore::CleanWindowsUpdate() {
 
 std::uint64_t DiskCleanerCore::CleanWindowsOld() {
     Status(L"清理 Windows.old...");
-    const fs::path old_path = DrivePath(L"\\Windows.old");
+    const fs::path old_path = LR"(C:\Windows.old)";
     std::error_code ec;
     if (!fs::exists(old_path, ec)) {
         Log(L"  Windows.old: 不存在");
@@ -1062,7 +821,7 @@ std::uint64_t DiskCleanerCore::CleanWindowsOld() {
     Log(L"  发现 Windows.old: " + FormatSize(size));
 
     RunProcess(L"takeown.exe", {L"/F", old_path.wstring(), L"/R", L"/A", L"/D", L"Y"}, 300000);
-    RunProcess(L"icacls.exe", {old_path.wstring(), L"/grant", L"*S-1-5-32-544:F", L"/T"}, 300000);
+    RunProcess(L"icacls.exe", {old_path.wstring(), L"/grant", L"Administrators:F", L"/T"}, 300000);
     RunProcess(L"cmd.exe", {L"/C", L"rd", L"/s", L"/q", old_path.wstring()}, 600000);
 
     if (!fs::exists(old_path, ec)) {
@@ -1077,7 +836,7 @@ std::uint64_t DiskCleanerCore::CleanWindowsOld() {
 
 std::uint64_t DiskCleanerCore::DisableHibernation() {
     Status(L"禁用休眠...");
-    const auto size = GetSize(DrivePath(L"\\hiberfil.sys"));
+    const auto size = GetSize(LR"(C:\hiberfil.sys)");
     if (size > 0) {
         Log(L"  休眠文件大小: " + FormatSize(size));
     }
@@ -1113,7 +872,7 @@ bool DiskCleanerCore::CleanRestorePoints() {
 
     Log(L"  发现 " + std::to_wstring(count) + L" 个还原点");
     const auto delete_result = RunProcess(L"vssadmin.exe",
-        {L"delete", L"shadows", L"/for=" + SystemDrive(), L"/oldest", L"/quiet"}, 120000);
+        {L"delete", L"shadows", L"/for=C:", L"/oldest", L"/quiet"}, 120000);
     if (!delete_result.timed_out && delete_result.exit_code == 0) {
         Log(L"  还原点: 已清理旧还原点");
         return true;
@@ -1126,9 +885,9 @@ bool DiskCleanerCore::CleanRestorePoints() {
 std::uint64_t DiskCleanerCore::CleanMemoryDumps() {
     Status(L"清理内存转储文件...");
     const std::vector<std::pair<std::wstring, std::wstring>> dump_locations = {
-        {SystemPath(L"\\MEMORY.DMP"), L"系统转储"},
-        {SystemPath(L"\\Minidump"), L"小型转储"},
-        {SystemPath(L"\\LiveKernelReports"), L"内核报告"},
+        {LR"(C:\Windows\MEMORY.DMP)", L"系统转储"},
+        {LR"(C:\Windows\Minidump)", L"小型转储"},
+        {LR"(C:\Windows\LiveKernelReports)", L"内核报告"},
     };
 
     std::uint64_t cleaned = 0;
@@ -1158,7 +917,8 @@ std::uint64_t DiskCleanerCore::CleanMemoryDumps() {
 
 std::uint64_t DiskCleanerCore::CleanDeliveryOptimization() {
     Status(L"清理传递优化...");
-    return CleanFolder(SystemPath(L"\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization"), L"传递优化缓存");
+    const auto system_root = GetEnvVar(L"SYSTEMROOT").empty() ? L"C:\\Windows" : GetEnvVar(L"SYSTEMROOT");
+    return CleanFolder(system_root + LR"(\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization)", L"传递优化缓存");
 }
 
 int DiskCleanerCore::CleanEventLogs() {
@@ -1197,14 +957,6 @@ bool DiskCleanerCore::RunCleanAction(const std::wstring& key) {
     }
     if (key == L"thumb") {
         CleanThumbnailCache();
-        return true;
-    }
-    if (key == L"wincache") {
-        CleanWindowsCache();
-        return true;
-    }
-    if (key == L"appcache") {
-        CleanApplicationCache();
         return true;
     }
     if (key == L"browser") {
@@ -1252,22 +1004,6 @@ bool DiskCleanerCore::RunCleanAction(const std::wstring& key) {
     }
     if (key == L"directx") {
         CleanDirectXCache();
-        return true;
-    }
-    if (key == L"gpu") {
-        CleanGpuCache();
-        return true;
-    }
-    if (key == L"inet") {
-        CleanInternetCache();
-        return true;
-    }
-    if (key == L"crashdumps") {
-        CleanCrashDumps();
-        return true;
-    }
-    if (key == L"setup") {
-        CleanSetupResidue();
         return true;
     }
     if (key == L"font") {

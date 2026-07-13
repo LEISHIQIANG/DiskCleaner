@@ -11,7 +11,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -216,66 +215,11 @@ bool CreateBitmapFromIconHandle(IWICImagingFactory* wic_factory, ID2D1RenderTarg
     }
 
     ComPtr<IWICBitmap> wic_bitmap;
-    HRESULT hr = wic_factory->CreateBitmapFromHICON(icon_handle, &wic_bitmap);
-    if (SUCCEEDED(hr)) {
-        ComPtr<IWICFormatConverter> converter;
-        if (SUCCEEDED(wic_factory->CreateFormatConverter(&converter))) {
-            if (SUCCEEDED(converter->Initialize(
-                    wic_bitmap.Get(),
-                    GUID_WICPixelFormat32bppPBGRA,
-                    WICBitmapDitherTypeNone,
-                    nullptr,
-                    0.0f,
-                    WICBitmapPaletteTypeCustom))) {
-                if (SUCCEEDED(render_target->CreateBitmapFromWicBitmap(converter.Get(), bitmap))) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Fallback: Rasterize the embedded HICON through GDI instead; the source remains the EXE resource.
-    constexpr int kRasterSize = 128;
-    BITMAPINFO info{};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = kRasterSize;
-    info.bmiHeader.biHeight = -kRasterSize;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-
-    void* pixels = nullptr;
-    const HDC dc = CreateCompatibleDC(nullptr);
-    const HBITMAP surface = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
-    if (dc == nullptr || surface == nullptr || pixels == nullptr) {
-        if (surface != nullptr) {
-            DeleteObject(surface);
-        }
-        if (dc != nullptr) {
-            DeleteDC(dc);
-        }
+    if (FAILED(wic_factory->CreateBitmapFromHICON(icon_handle, &wic_bitmap))) {
         return false;
     }
 
-    const HGDIOBJ previous = SelectObject(dc, surface);
-    std::memset(pixels, 0, static_cast<std::size_t>(kRasterSize * kRasterSize * 4));
-    const BOOL drawn = DrawIconEx(dc, 0, 0, icon_handle, kRasterSize, kRasterSize, 0, nullptr, DI_NORMAL);
-    if (previous != nullptr) {
-        SelectObject(dc, previous);
-    }
-
-    ComPtr<IWICBitmap> rasterized_bitmap;
-    const HRESULT create_bitmap = drawn
-        ? wic_factory->CreateBitmapFromMemory(
-              kRasterSize, kRasterSize, GUID_WICPixelFormat32bppPBGRA, kRasterSize * 4,
-              kRasterSize * kRasterSize * 4, static_cast<BYTE*>(pixels), &rasterized_bitmap)
-        : E_FAIL;
-    const HRESULT copy_bitmap = SUCCEEDED(create_bitmap)
-        ? render_target->CreateBitmapFromWicBitmap(rasterized_bitmap.Get(), bitmap)
-        : E_FAIL;
-    DeleteObject(surface);
-    DeleteDC(dc);
-    return SUCCEEDED(copy_bitmap);
+    return SUCCEEDED(render_target->CreateBitmapFromWicBitmap(wic_bitmap.Get(), bitmap));
 }
 
 bool LoadTitleIconBitmapFromResource(IWICImagingFactory* wic_factory, ID2D1RenderTarget* render_target,
@@ -298,17 +242,6 @@ bool LoadTitleIconBitmapFromResource(IWICImagingFactory* wic_factory, ID2D1Rende
 
 std::wstring ButtonText(bool busy, const wchar_t* idle_text) {
     return busy ? L"处理中..." : idle_text;
-}
-
-double GetHighPrecisionTime() {
-    static LARGE_INTEGER frequency = []() {
-        LARGE_INTEGER freq;
-        QueryPerformanceFrequency(&freq);
-        return freq;
-    }();
-    LARGE_INTEGER counter;
-    QueryPerformanceCounter(&counter);
-    return static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
 }
 
 } // namespace
@@ -340,7 +273,7 @@ bool AppWindow::Create() {
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = &AppWindow::WndProcThunk;
     wc.hInstance = instance_;
-    wc.lpszClassName = L"DiskCleanerModernWindow";
+    wc.lpszClassName = L"DiskCleanerCppModernWindow";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON));
     wc.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 32, 32, 0));
@@ -353,17 +286,17 @@ bool AppWindow::Create() {
     InitializeVisuals();
     UpdateDpi(GetSystemDpiValue());
 
-    const int initial_width = ScaleInt(static_cast<float>(kWindowWidth));
-    const int initial_height = ScaleInt(static_cast<float>(kWindowHeight));
+    const int width = ScaleInt(static_cast<float>(kWindowWidth));
+    const int height = ScaleInt(static_cast<float>(kWindowHeight));
     hwnd_ = CreateWindowExW(
         WS_EX_APPWINDOW,
         wc.lpszClassName,
-        L"DiskCleaner",
+        L"DiskCleaner C++",
         WS_POPUP | WS_SYSMENU,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        initial_width,
-        initial_height,
+        width,
+        height,
         nullptr,
         nullptr,
         instance_,
@@ -374,33 +307,12 @@ bool AppWindow::Create() {
     }
 
     UpdateDpi(GetWindowDpiValue(hwnd_));
-    int final_width = ScaleInt(static_cast<float>(kWindowWidth));
-    int final_height = ScaleInt(static_cast<float>(kWindowHeight));
-
-    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO monitor_info{};
-    monitor_info.cbSize = sizeof(monitor_info);
-    GetMonitorInfoW(monitor, &monitor_info);
-
-    const int work_width = monitor_info.rcWork.right - monitor_info.rcWork.left;
-    const int work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
-
-    if (final_height > work_height - 20) {
-        final_height = work_height - 20;
-    }
-    if (final_width > work_width - 20) {
-        final_width = work_width - 20;
-    }
-
-    const int x = monitor_info.rcWork.left + (work_width - final_width) / 2;
-    const int y = monitor_info.rcWork.top + (work_height - final_height) / 2;
-    SetWindowPos(hwnd_, nullptr, x, y, final_width, final_height, SWP_NOZORDER | SWP_FRAMECHANGED);
+    const int screen_width = GetSystemMetrics(SM_CXSCREEN);
+    const int screen_height = GetSystemMetrics(SM_CYSCREEN);
+    const int x = (screen_width - width) / 2;
+    const int y = (screen_height - height) / 2;
+    SetWindowPos(hwnd_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_FRAMECHANGED);
     ApplyWindowEffects();
-    
-    RecalculateContentHeight();
-    ClampScroll();
-    ClampLogScroll();
-    
     return true;
 }
 
@@ -454,33 +366,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     case WM_DPICHANGED: {
         UpdateDpi(HIWORD(wparam));
-        RECT suggested = *reinterpret_cast<RECT*>(lparam);
-        
-        HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY);
-        MONITORINFO monitor_info{};
-        monitor_info.cbSize = sizeof(monitor_info);
-        GetMonitorInfoW(monitor, &monitor_info);
-
-        const int work_width = monitor_info.rcWork.right - monitor_info.rcWork.left;
-        const int work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
-
-        int width = suggested.right - suggested.left;
-        int height = suggested.bottom - suggested.top;
-
-        if (height > work_height - 20) {
-            height = work_height - 20;
-        }
-        if (width > work_width - 20) {
-            width = work_width - 20;
-        }
-
-        SetWindowPos(hwnd_, nullptr, suggested.left, suggested.top,
-                     width, height,
+        const auto* suggested = reinterpret_cast<RECT*>(lparam);
+        SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
+                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                      SWP_NOACTIVATE | SWP_NOZORDER);
         DiscardDeviceResources();
         RecalculateContentHeight();
-        ClampScroll();
-        ClampLogScroll();
         Invalidate();
         return 0;
     }
@@ -489,7 +380,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             render_target_->Resize(D2D1::SizeU(LOWORD(lparam), HIWORD(lparam)));
         }
         ClampScroll();
-        ClampLogScroll();
         Invalidate();
         return 0;
     case WM_MOUSEMOVE: {
@@ -511,24 +401,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         hover_token_.clear();
         Invalidate();
         return 0;
-    case WM_MOUSEWHEEL: {
-        const POINT screen_pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-        POINT client_pt = screen_pt;
-        ScreenToClient(hwnd_, &client_pt);
-        
-        const float delta = -static_cast<float>(static_cast<short>(HIWORD(wparam))) * Scale(68.0f) /
-                            static_cast<float>(WHEEL_DELTA);
-                            
-        const RECT log_rect = GetLogRect();
-        if (client_pt.x >= log_rect.left && client_pt.x <= log_rect.right &&
-            client_pt.y >= log_rect.top && client_pt.y <= log_rect.bottom) {
-            ScrollLogBy(delta);
-        } else {
-            ScrollBy(delta);
-        }
-        return 0;
-    }
-    case WM_TIMER:
+    case WM_MOUSEWHEEL:
+        scroll_offset_ -= static_cast<short>(HIWORD(wparam)) / WHEEL_DELTA * ScaleInt(56.0f);
+        ClampScroll();
+        Invalidate();
         return 0;
     case WM_LBUTTONDOWN: {
         const auto hit = HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
@@ -594,15 +470,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
     }
     case WM_CLOSE:
         if (busy_) {
-            MessageBoxW(hwnd_, L"任务仍在运行，请等待完成后再关闭。", L"DiskCleaner", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(hwnd_, L"任务仍在运行，请等待完成后再关闭。", L"DiskCleaner C++", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         SaveConfig();
         DestroyWindow(hwnd_);
         return 0;
     case WM_DESTROY:
-        KillTimer(hwnd_, kScrollAnimationTimer);
-        animating_ = false;
         SaveConfig();
         hwnd_ = nullptr;
         PostQuitMessage(0);
@@ -748,7 +622,7 @@ void AppWindow::LoadConfig() {
 }
 
 void AppWindow::SaveConfig() const {
-    std::wstring json = L"{\"schema_version\":2,\"selected_items\":[";
+    std::wstring json = L"{\"selected_items\":[";
     bool first = true;
     for (const auto& item : DiskCleanerCore::AllItems()) {
         const auto it = selected_.find(item.key);
@@ -965,21 +839,21 @@ RECT AppWindow::GetViewportRect() const {
     RECT client{};
     GetClientRect(hwnd_, &client);
     const RECT log_rect = GetLogRect();
-    return MakeRect(ScaleInt(10.0f), ScaleInt(64.0f), client.right - ScaleInt(10.0f), log_rect.top - ScaleInt(12.0f));
+    return MakeRect(ScaleInt(14.0f), ScaleInt(64.0f), client.right - ScaleInt(14.0f), log_rect.top - ScaleInt(14.0f));
 }
 
 RECT AppWindow::GetLogRect() const {
     RECT client{};
     GetClientRect(hwnd_, &client);
-    return MakeRect(ScaleInt(10.0f), client.bottom - ScaleInt(160.0f), client.right - ScaleInt(10.0f), client.bottom - ScaleInt(58.0f));
+    return MakeRect(ScaleInt(14.0f), client.bottom - ScaleInt(128.0f), client.right - ScaleInt(14.0f), client.bottom - ScaleInt(58.0f));
 }
 
 RECT AppWindow::GetScanButtonRect() const {
     RECT client{};
     GetClientRect(hwnd_, &client);
-    const int left = ScaleInt(10.0f);
+    const int left = ScaleInt(14.0f);
     const int gap = ScaleInt(10.0f);
-    const int width = (client.right - ScaleInt(20.0f) - gap) / 2;
+    const int width = (client.right - ScaleInt(28.0f) - gap) / 2;
     const int top = client.bottom - ScaleInt(46.0f);
     return MakeRect(left, top, left + width, client.bottom - ScaleInt(14.0f));
 }
@@ -989,7 +863,7 @@ RECT AppWindow::GetCleanButtonRect() const {
     GetClientRect(hwnd_, &client);
     const RECT scan_rect = GetScanButtonRect();
     const int gap = ScaleInt(10.0f);
-    return MakeRect(scan_rect.right + gap, scan_rect.top, client.right - ScaleInt(10.0f), scan_rect.bottom);
+    return MakeRect(scan_rect.right + gap, scan_rect.top, client.right - ScaleInt(14.0f), scan_rect.bottom);
 }
 
 void AppWindow::Paint() {
@@ -1085,10 +959,18 @@ void AppWindow::Paint() {
     render_target_->BeginDraw();
     render_target_->Clear(ToColor(RGB(245, 247, 251), 0.18f));
 
+    const auto top_glow = make_brush(RGB(255, 255, 255), 0.10f);
+    render_target_->FillEllipse(
+        D2D1::Ellipse(
+            D2D1::Point2F(static_cast<float>(ScaleInt(82.0f)), static_cast<float>(ScaleInt(18.0f))),
+            Scale(96.0f),
+            Scale(42.0f)),
+        top_glow.Get());
+
     if (title_icon_bitmap_) {
         const RECT icon_tile_rect = MakeRect(ScaleInt(14.0f), ScaleInt(14.0f), ScaleInt(40.0f), ScaleInt(40.0f));
-        const auto tile_fill = make_brush(RGB(255, 255, 255), 0.72f);
-        const auto tile_stroke = make_brush(RGB(211, 219, 231), 0.92f);
+        const auto tile_fill = make_brush(RGB(255, 255, 255), 0.50f);
+        const auto tile_stroke = make_brush(RGB(255, 255, 255), 0.24f);
         render_target_->FillRoundedRectangle(ToRoundedRect(icon_tile_rect, Scale(7.0f)), tile_fill.Get());
         render_target_->DrawRoundedRectangle(ToRoundedRect(icon_tile_rect, Scale(7.0f)), tile_stroke.Get(), Scale(1.0f));
         render_target_->DrawBitmap(
@@ -1123,10 +1005,10 @@ void AppWindow::Paint() {
 
     const bool close_hover = hover_token_ == HitToToken({ HitType::Close, close_rect, L"", false });
     const bool close_pressed = pressed_token_ == HitToToken({ HitType::Close, close_rect, L"", false });
-    const auto close_fill = make_brush(close_hover ? RGB(235, 78, 68) : RGB(255, 255, 255), close_hover ? 1.0f : 0.78f);
-    const auto close_stroke = make_brush(close_hover ? RGB(255, 255, 255) : RGB(50, 56, 66), 1.0f);
-    const auto close_border = make_brush(close_hover ? RGB(235, 78, 68) : RGB(211, 217, 226), 1.0f);
-    const auto close_shadow = make_brush(RGB(15, 23, 42), close_pressed ? 0.028f : 0.050f);
+    const auto close_fill = make_brush(close_hover ? RGB(255, 95, 87) : RGB(255, 255, 255), close_hover ? 0.94f : 0.42f);
+    const auto close_stroke = make_brush(close_hover ? RGB(255, 255, 255) : RGB(96, 102, 112), close_hover ? 1.0f : 0.86f);
+    const auto close_border = make_brush(RGB(255, 255, 255), close_hover ? 0.16f : 0.26f);
+    const auto close_shadow = make_brush(RGB(15, 23, 42), close_pressed ? 0.022f : 0.038f);
     const RECT close_shadow_rect = MakeRect(
         close_rect.left,
         close_rect.top + ScaleInt(close_pressed ? 0.5f : 1.5f),
@@ -1139,12 +1021,12 @@ void AppWindow::Paint() {
         D2D1::Point2F(static_cast<float>(close_rect.left + ScaleInt(8.0f)), static_cast<float>(close_rect.top + ScaleInt(8.0f))),
         D2D1::Point2F(static_cast<float>(close_rect.right - ScaleInt(8.0f)), static_cast<float>(close_rect.bottom - ScaleInt(8.0f))),
         close_stroke.Get(),
-        Scale(1.8f));
+        Scale(1.6f));
     render_target_->DrawLine(
         D2D1::Point2F(static_cast<float>(close_rect.right - ScaleInt(8.0f)), static_cast<float>(close_rect.top + ScaleInt(8.0f))),
         D2D1::Point2F(static_cast<float>(close_rect.left + ScaleInt(8.0f)), static_cast<float>(close_rect.bottom - ScaleInt(8.0f))),
         close_stroke.Get(),
-        Scale(1.8f));
+        Scale(1.6f));
     hit_regions_.push_back({ HitType::Close, close_rect, L"", false });
 
     const auto viewport_clip = D2D1::RectF(
@@ -1180,7 +1062,7 @@ void AppWindow::Paint() {
     };
 
     auto draw_item = [&](const CleanItemDefinition& item) {
-        const RECT card_rect = MakeRect(viewport_rect.left + ScaleInt(1.0f), cursor_y, viewport_rect.right - ScaleInt(1.0f), cursor_y + item_height);
+        const RECT card_rect = MakeRect(viewport_rect.left + ScaleInt(2.0f), cursor_y, viewport_rect.right - ScaleInt(2.0f), cursor_y + item_height);
         const RECT toggle_rect = MakeRect(card_rect.right - ScaleInt(48.0f), card_rect.top + ScaleInt(17.0f), card_rect.right - ScaleInt(14.0f), card_rect.top + ScaleInt(37.0f));
         const bool checked = selected_[item.key];
         const auto card_token = HitToToken({ HitType::ItemCard, card_rect, item.key, item.cautious });
@@ -1263,6 +1145,22 @@ void AppWindow::Paint() {
 
     render_target_->PopAxisAlignedClip();
 
+    const int viewport_height = viewport_rect.bottom - viewport_rect.top;
+    const int max_scroll = (std::max)(0, content_height_ - viewport_height);
+    if (max_scroll > 0) {
+        const RECT track_rect = MakeRect(viewport_rect.right + ScaleInt(2.0f), viewport_rect.top + ScaleInt(8.0f), viewport_rect.right + ScaleInt(5.0f), viewport_rect.bottom - ScaleInt(8.0f));
+        const auto track_brush = make_brush(RGB(255, 255, 255), 0.16f);
+        render_target_->FillRoundedRectangle(ToRoundedRect(track_rect, Scale(2.5f)), track_brush.Get());
+
+        const float ratio = static_cast<float>(viewport_height) / static_cast<float>(content_height_);
+        const int thumb_height = (std::max)(ScaleInt(40.0f), static_cast<int>((track_rect.bottom - track_rect.top) * ratio + 0.5f));
+        const float scroll_ratio = max_scroll > 0 ? static_cast<float>(scroll_offset_) / static_cast<float>(max_scroll) : 0.0f;
+        const int thumb_top = track_rect.top + static_cast<int>((track_rect.bottom - track_rect.top - thumb_height) * scroll_ratio + 0.5f);
+        const RECT thumb_rect = MakeRect(track_rect.left - ScaleInt(1.0f), thumb_top, track_rect.right + ScaleInt(1.0f), thumb_top + thumb_height);
+        const auto thumb_brush = make_brush(RGB(117, 138, 170), 0.44f);
+        render_target_->FillRoundedRectangle(ToRoundedRect(thumb_rect, Scale(3.0f)), thumb_brush.Get());
+    }
+
     draw_card(log_rect, RGB(255, 255, 255), 0.54f, RGB(255, 255, 255), 0.24f, Scale(15.0f), false, 1.02f);
     draw_text(log_title_format_.Get(),
               MakeRect(log_rect.left + ScaleInt(12.0f), log_rect.top + ScaleInt(8.0f), log_rect.left + ScaleInt(96.0f), log_rect.top + ScaleInt(28.0f)),
@@ -1279,51 +1177,19 @@ void AppWindow::Paint() {
 
     int line_y = log_rect.top + ScaleInt(30.0f);
     const int line_height = ScaleInt(16.0f);
+    const int available_log_height = static_cast<int>(log_rect.bottom) - line_y - ScaleInt(8.0f);
+    const int visible_lines = (std::max)(1, available_log_height / line_height);
     const int line_count = static_cast<int>(log_lines_.size());
-
-    const auto log_viewport_clip = D2D1::RectF(
-        static_cast<float>(log_rect.left + ScaleInt(8.0f)),
-        static_cast<float>(line_y),
-        static_cast<float>(log_rect.right - ScaleInt(8.0f)),
-        static_cast<float>(log_rect.bottom - ScaleInt(6.0f)));
-    render_target_->PushAxisAlignedClip(log_viewport_clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-
-    for (int i = 0; i < line_count; ++i) {
-        int draw_y = line_y + i * line_height - log_scroll_offset_;
-        if (draw_y + line_height >= line_y && draw_y <= log_rect.bottom - ScaleInt(8.0f)) {
-            const auto& line = log_lines_[static_cast<std::size_t>(i)];
-            
-            COLORREF color = RGB(106, 111, 121); // Default gray
-            float alpha = 0.96f;
-
-            if (line.find(L"失败") != std::wstring::npos || 
-                line.find(L"错误") != std::wstring::npos ||
-                line.find(L"跳过") != std::wstring::npos) {
-                color = RGB(225, 60, 50); // Red for error/failure
-            } else if (line.find(L"警告") != std::wstring::npos ||
-                       line.find(L"受限") != std::wstring::npos) {
-                color = RGB(235, 120, 30); // Orange for warning/limitation
-            } else if (line.find(L"完成") != std::wstring::npos || 
-                       line.find(L"成功") != std::wstring::npos ||
-                       line.find(L"释放空间") != std::wstring::npos ||
-                       line.find(L"已清理") != std::wstring::npos) {
-                color = RGB(34, 154, 75); // Green for success
-            } else if (line.find(L"开始") != std::wstring::npos || 
-                       line.find(L"----") != std::wstring::npos ||
-                       line.find(L"正在清理") != std::wstring::npos ||
-                       line.find(L"准备就绪") != std::wstring::npos) {
-                color = RGB(42, 113, 222); // Blue for actions/sections
-            }
-
-            draw_text(log_body_format_.Get(),
-                      MakeRect(log_rect.left + ScaleInt(12.0f), draw_y, log_rect.right - ScaleInt(12.0f), draw_y + line_height),
-                      line,
-                      color,
-                      alpha,
-                      DWRITE_TEXT_ALIGNMENT_LEADING);
-        }
+    const int start_index = (std::max)(0, line_count - visible_lines);
+    for (int i = start_index; i < line_count; ++i) {
+        draw_text(log_body_format_.Get(),
+                  MakeRect(log_rect.left + ScaleInt(12.0f), line_y, log_rect.right - ScaleInt(12.0f), line_y + line_height),
+                  log_lines_[static_cast<std::size_t>(i)],
+                  RGB(98, 103, 114),
+                  0.96f,
+                  DWRITE_TEXT_ALIGNMENT_LEADING);
+        line_y += line_height;
     }
-    render_target_->PopAxisAlignedClip();
 
     const auto scan_region = HitRegion{ HitType::Scan, scan_rect, L"", false };
     const auto clean_region = HitRegion{ HitType::Clean, clean_rect, L"", false };
@@ -1475,20 +1341,6 @@ void AppWindow::AppendLog(const std::wstring& text) {
     while (log_lines_.size() > 80) {
         log_lines_.pop_front();
     }
-
-    const RECT log_rect = GetLogRect();
-    const int line_y = log_rect.top + ScaleInt(30.0f);
-    const int line_height = ScaleInt(16.0f);
-    const int available_log_height = (std::max)(0, static_cast<int>(log_rect.bottom) - line_y - ScaleInt(8.0f));
-    const int log_content_height = static_cast<int>(log_lines_.size()) * line_height;
-    const int max_log_scroll = (std::max)(0, log_content_height - available_log_height);
-
-    log_scroll_target_ = static_cast<float>(max_log_scroll);
-    if (!animating_) {
-        animating_ = true;
-        scroll_last_time_ = GetHighPrecisionTime();
-    }
-    Invalidate();
 }
 
 void AppWindow::SetStatus(const std::wstring& text) {
@@ -1540,204 +1392,15 @@ void AppWindow::RecalculateContentHeight() {
 }
 
 void AppWindow::ClampScroll() {
-    if (hwnd_ == nullptr || content_height_ <= 0) {
+    if (hwnd_ == nullptr) {
         scroll_offset_ = 0;
-        scroll_position_ = 0.0f;
-        scroll_target_ = 0.0f;
         return;
     }
 
     const RECT viewport = GetViewportRect();
     const int viewport_height = (std::max)(0, static_cast<int>(viewport.bottom) - static_cast<int>(viewport.top));
     const int max_scroll = (std::max)(0, content_height_ - viewport_height);
-
-    const float limit = Scale(50.0f);
-    scroll_position_ = (std::clamp)(scroll_position_, -limit, static_cast<float>(max_scroll) + limit);
-    scroll_target_ = (std::clamp)(scroll_target_, -limit, static_cast<float>(max_scroll) + limit);
-    scroll_offset_ = static_cast<int>(std::lround(scroll_position_));
-}
-
-void AppWindow::ClampLogScroll() {
-    if (hwnd_ == nullptr) {
-        log_scroll_offset_ = 0;
-        log_scroll_position_ = 0.0f;
-        log_scroll_target_ = 0.0f;
-        return;
-    }
-
-    const RECT log_rect = GetLogRect();
-    const int line_y = log_rect.top + ScaleInt(30.0f);
-    const int line_height = ScaleInt(16.0f);
-    const int available_log_height = (std::max)(0, static_cast<int>(log_rect.bottom) - line_y - ScaleInt(8.0f));
-    const int log_content_height = static_cast<int>(log_lines_.size()) * line_height;
-    const int max_log_scroll = (std::max)(0, log_content_height - available_log_height);
-
-    const float limit = Scale(30.0f);
-    log_scroll_position_ = (std::clamp)(log_scroll_position_, -limit, static_cast<float>(max_log_scroll) + limit);
-    log_scroll_target_ = (std::clamp)(log_scroll_target_, -limit, static_cast<float>(max_log_scroll) + limit);
-    log_scroll_offset_ = static_cast<int>(std::lround(log_scroll_position_));
-}
-
-void AppWindow::ScrollBy(float delta) {
-    if (std::abs(delta) < 0.01f || hwnd_ == nullptr) {
-        return;
-    }
-
-    const RECT viewport = GetViewportRect();
-    const int viewport_height = (std::max)(0, static_cast<int>(viewport.bottom) - static_cast<int>(viewport.top));
-    const int max_scroll = (std::max)(0, content_height_ - viewport_height);
-
-    // Apply resistance if out of bounds
-    float resistance = 1.0f;
-    if (scroll_target_ < 0.0f && delta < 0.0f) {
-        resistance = 1.0f / (1.0f + std::abs(scroll_target_) * 0.05f);
-    } else if (scroll_target_ > static_cast<float>(max_scroll) && delta > 0.0f) {
-        resistance = 1.0f / (1.0f + (scroll_target_ - static_cast<float>(max_scroll)) * 0.05f);
-    }
-
-    // Add to velocity instead of instantaneous target shift for inertia
-    scroll_velocity_ += delta * resistance * 12.0f;
-
-    // Clamp maximum velocity to avoid uncontrollable speeds
-    const float max_vel = Scale(1500.0f);
-    scroll_velocity_ = (std::clamp)(scroll_velocity_, -max_vel, max_vel);
-
-    if (!animating_) {
-        animating_ = true;
-        scroll_last_time_ = GetHighPrecisionTime();
-        scroll_target_ = scroll_position_;
-    }
-}
-
-void AppWindow::ScrollLogBy(float delta) {
-    if (std::abs(delta) < 0.01f || hwnd_ == nullptr) {
-        return;
-    }
-
-    const RECT log_rect = GetLogRect();
-    const int line_y = log_rect.top + ScaleInt(30.0f);
-    const int line_height = ScaleInt(16.0f);
-    const int available_log_height = (std::max)(0, static_cast<int>(log_rect.bottom) - line_y - ScaleInt(8.0f));
-    const int log_content_height = static_cast<int>(log_lines_.size()) * line_height;
-    const int max_log_scroll = (std::max)(0, log_content_height - available_log_height);
-
-    // Apply resistance if out of bounds
-    float resistance = 1.0f;
-    if (log_scroll_target_ < 0.0f && delta < 0.0f) {
-        resistance = 1.0f / (1.0f + std::abs(log_scroll_target_) * 0.08f);
-    } else if (log_scroll_target_ > static_cast<float>(max_log_scroll) && delta > 0.0f) {
-        resistance = 1.0f / (1.0f + (log_scroll_target_ - static_cast<float>(max_log_scroll)) * 0.08f);
-    }
-
-    // Add to velocity
-    log_scroll_velocity_ += delta * resistance * 12.0f;
-
-    const float max_vel = Scale(1500.0f);
-    log_scroll_velocity_ = (std::clamp)(log_scroll_velocity_, -max_vel, max_vel);
-
-    if (!animating_) {
-        animating_ = true;
-        scroll_last_time_ = GetHighPrecisionTime();
-        log_scroll_target_ = log_scroll_position_;
-    }
-}
-
-void AppWindow::AdvanceScrollAnimation() {
-    if (hwnd_ == nullptr) {
-        return;
-    }
-
-    const double now = GetHighPrecisionTime();
-    const double elapsed = scroll_last_time_ == 0.0 ? 0.016 : (std::min)(now - scroll_last_time_, 0.05);
-    scroll_last_time_ = now;
-    const float seconds = static_cast<float>(elapsed);
-    
-    // Viewport calculations for main list
-    const RECT viewport = GetViewportRect();
-    const int viewport_height = (std::max)(0, static_cast<int>(viewport.bottom) - static_cast<int>(viewport.top));
-    const int max_scroll = (std::max)(0, content_height_ - viewport_height);
-
-    // Viewport calculations for log
-    const RECT log_rect = GetLogRect();
-    const int log_line_y = log_rect.top + ScaleInt(30.0f);
-    const int log_line_height = ScaleInt(16.0f);
-    const int available_log_height = (std::max)(0, static_cast<int>(log_rect.bottom) - log_line_y - ScaleInt(8.0f));
-    const int log_content_height = static_cast<int>(log_lines_.size()) * log_line_height;
-    const int max_log_scroll = (std::max)(0, log_content_height - available_log_height);
-
-    // --- 1. Update Main List Kinetic State ---
-    scroll_target_ += scroll_velocity_ * seconds;
-
-    // Decay velocity with friction
-    scroll_velocity_ *= std::exp(-8.0f * seconds);
-    if (std::abs(scroll_velocity_) < 5.0f) {
-        scroll_velocity_ = 0.0f;
-    }
-
-    // Apply spring force if out of bounds (and kill velocity when crossing bounds)
-    if (scroll_target_ < 0.0f) {
-        scroll_velocity_ = 0.0f;
-        scroll_target_ += (0.0f - scroll_target_) * (1.0f - std::exp(-15.0f * seconds));
-    } else if (scroll_target_ > static_cast<float>(max_scroll)) {
-        scroll_velocity_ = 0.0f;
-        scroll_target_ += (static_cast<float>(max_scroll) - scroll_target_) * (1.0f - std::exp(-15.0f * seconds));
-    }
-
-    // --- 2. Update Log Kinetic State ---
-    log_scroll_target_ += log_scroll_velocity_ * seconds;
-
-    // Decay velocity
-    log_scroll_velocity_ *= std::exp(-8.0f * seconds);
-    if (std::abs(log_scroll_velocity_) < 5.0f) {
-        log_scroll_velocity_ = 0.0f;
-    }
-
-    // Apply spring force if out of bounds
-    if (log_scroll_target_ < 0.0f) {
-        log_scroll_velocity_ = 0.0f;
-        log_scroll_target_ += (0.0f - log_scroll_target_) * (1.0f - std::exp(-15.0f * seconds));
-    } else if (log_scroll_target_ > static_cast<float>(max_log_scroll)) {
-        log_scroll_velocity_ = 0.0f;
-        log_scroll_target_ += (static_cast<float>(max_log_scroll) - log_scroll_target_) * (1.0f - std::exp(-15.0f * seconds));
-    }
-
-    const float response = 1.0f - std::exp(-22.0f * seconds);
-
-    // --- 3. Interpolate Main List Position ---
-    const float difference = scroll_target_ - scroll_position_;
-    bool list_done = false;
-    if (std::abs(difference) < 0.05f && scroll_target_ >= 0.0f && scroll_target_ <= static_cast<float>(max_scroll) && std::abs(scroll_velocity_) < 0.1f) {
-        scroll_position_ = scroll_target_;
-        ClampScroll();
-        list_done = true;
-    } else {
-        scroll_position_ += difference * response;
-        ClampScroll();
-    }
-
-    // --- 4. Interpolate Log Position ---
-    const float log_difference = log_scroll_target_ - log_scroll_position_;
-    bool log_done = false;
-    if (std::abs(log_difference) < 0.05f && log_scroll_target_ >= 0.0f && log_scroll_target_ <= static_cast<float>(max_log_scroll) && std::abs(log_scroll_velocity_) < 0.1f) {
-        log_scroll_position_ = log_scroll_target_;
-        ClampLogScroll();
-        log_done = true;
-    } else {
-        log_scroll_position_ += log_difference * response;
-        ClampLogScroll();
-    }
-
-    if (list_done && log_done) {
-        animating_ = false;
-        scroll_last_time_ = 0.0;
-    }
-
-    Invalidate();
-}
-
-void AppWindow::AdvanceAnimation() {
-    DwmFlush(); // Synchronize with VSync
-    AdvanceScrollAnimation();
+    scroll_offset_ = (std::clamp)(scroll_offset_, 0, max_scroll);
 }
 
 AppWindow::HitRegion AppWindow::HitTest(int x, int y) const {

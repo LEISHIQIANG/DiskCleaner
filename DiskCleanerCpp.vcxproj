@@ -44,7 +44,7 @@
   <PropertyGroup>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)build\obj\$(Configuration)\</IntDir>
-    <TargetName>DiskCleaner</TargetName>
+    <TargetName>DiskCleanerCpp</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>

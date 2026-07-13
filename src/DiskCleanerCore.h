@@ -37,18 +37,11 @@ private:
     bool CheckPathAccessible(const std::wstring& path) const;
     std::uint64_t ScanFolder(const std::wstring& path, const std::wstring& file_pattern = L"", int min_age_days = 0) const;
     std::uint64_t CleanFolder(const std::wstring& path, const std::wstring& desc,
-        const std::wstring& file_pattern = L"", int min_age_days = 0,
-        bool log_result = true, bool is_recursive_call = false);
+        const std::wstring& file_pattern = L"", int min_age_days = 0);
 
     std::uint64_t GetRecycleSize() const;
     std::uint64_t GetRestoreSize() const;
     std::uint64_t ScanBrowserCacheSize() const;
-    std::uint64_t ScanWindowsCacheSize() const;
-    std::uint64_t ScanApplicationCacheSize() const;
-    std::uint64_t ScanGpuCacheSize() const;
-    std::uint64_t ScanInternetCacheSize() const;
-    std::uint64_t ScanCrashDumpSize() const;
-    std::uint64_t ScanSetupResidueSize() const;
 
     std::uint64_t CleanWindowsTemp();
     std::uint64_t CleanUserTemp();
@@ -59,12 +52,6 @@ private:
     std::uint64_t CleanWindowsLogs();
     std::uint64_t CleanErrorReports();
     std::uint64_t CleanBrowserCache();
-    std::uint64_t CleanWindowsCache();
-    std::uint64_t CleanApplicationCache();
-    std::uint64_t CleanGpuCache();
-    std::uint64_t CleanInternetCache();
-    std::uint64_t CleanCrashDumps();
-    std::uint64_t CleanSetupResidue();
     std::uint64_t CleanFontCache();
     std::uint64_t CleanInstallerCache();
     std::uint64_t CleanWindowsUpdate();

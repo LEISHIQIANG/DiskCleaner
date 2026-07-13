@@ -37,17 +37,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_cmd) {
     UpdateWindow(window.hwnd());
 
     MSG msg{};
-    while (msg.message != WM_QUIT) {
-        if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        } else {
-            if (window.IsAnimating()) {
-                window.AdvanceAnimation();
-            } else {
-                WaitMessage();
-            }
-        }
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
 
     return static_cast<int>(msg.wParam);

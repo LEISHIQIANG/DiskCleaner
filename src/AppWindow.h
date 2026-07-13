@@ -22,8 +22,6 @@ public:
 
     bool Create();
     HWND hwnd() const noexcept { return hwnd_; }
-    bool IsAnimating() const noexcept { return animating_; }
-    void AdvanceAnimation();
 
     enum class HitType {
         None = 0,
@@ -60,9 +58,8 @@ public:
 
 private:
     static constexpr UINT WM_APP_WORKER_EVENT = WM_APP + 0x77;
-    static constexpr UINT_PTR kScrollAnimationTimer = 0x534;
     static constexpr int kWindowWidth = 320;
-    static constexpr int kWindowHeight = 644;
+    static constexpr int kWindowHeight = 612;
 
     static LRESULT CALLBACK WndProcThunk(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
     LRESULT HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam);
@@ -101,10 +98,6 @@ private:
     void SetSectionSelection(bool cautious, bool checked);
     void RecalculateContentHeight();
     void ClampScroll();
-    void ClampLogScroll();
-    void ScrollBy(float delta);
-    void ScrollLogBy(float delta);
-    void AdvanceScrollAnimation();
 
     HitRegion HitTest(int x, int y) const;
     bool IsPointInRect(const RECT& rect, int x, int y) const;
@@ -125,16 +118,7 @@ private:
 
     bool busy_ = false;
     bool is_admin_ = false;
-    bool animating_ = false;
     int scroll_offset_ = 0;
-    float scroll_position_ = 0.0f;
-    float scroll_target_ = 0.0f;
-    double scroll_last_time_ = 0.0;
-    float scroll_velocity_ = 0.0f;
-    float log_scroll_position_ = 0.0f;
-    float log_scroll_target_ = 0.0f;
-    float log_scroll_velocity_ = 0.0f;
-    int log_scroll_offset_ = 0;
     int content_height_ = 0;
     std::wstring hover_token_;
     std::wstring pressed_token_;
