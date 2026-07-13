@@ -16,7 +16,7 @@
 #include <memory>
 #include <sstream>
 
-#include "../resource.h"
+#include "resource.h"
 
 namespace {
 
